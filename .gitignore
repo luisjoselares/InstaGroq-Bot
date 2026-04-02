@@ -1,0 +1,21 @@
+# Entornos virtuales
+venv/
+env/
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+
+# Bases de datos SQLite (¡No subir datos de clientes!)
+*.db
+*.sqlite3
+
+# Sesiones de Instagram y credenciales
+sessions/
+*.json
+.env
+
+# Archivos compilados (si luego usas PyInstaller)
+build/
+dist/
+*.spec
