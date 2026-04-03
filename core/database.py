@@ -7,16 +7,17 @@ class DBConnection:
         self.init_db()
 
     def get_connection(self):
+        """Establece la conexión y permite acceso por nombre de columna."""
         conn = sqlite3.connect(self.db_name)
-        conn.row_factory = sqlite3.Row  # Permite acceder a datos por nombre de columna
+        conn.row_factory = sqlite3.Row 
         return conn
 
     def init_db(self):
-        """Maneja la creación inicial y las auto-migraciones"""
+        """Maneja la creación inicial y las auto-migraciones de las tablas."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. Tabla de Configuración (Single Row)
+            # 1. Tabla de Configuración: Almacena credenciales y estado global del bot.
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS settings (
                     id INTEGER PRIMARY KEY,
@@ -29,7 +30,7 @@ class DBConnection:
                 )
             ''')
 
-            # 2. Tabla de Logs e Historial (Para el RAG y Analíticas)
+            # 2. Tabla de Historial: Almacena los mensajes para la memoria de la IA y analíticas.
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,15 +43,26 @@ class DBConnection:
                 )
             ''')
 
-            # 3. EJEMPLO DE AUTO-MIGRACIÓN:
-            # Si en el futuro necesitas agregar una columna 'token_usage', 
-            # verificamos si existe, si no, la añadimos.
+            # 3. Tabla de Estado de Chats: Controla el "Botón de Pánico" por cada conversación.
+            # Esta tabla es vital para que el motor de Instagram sepa a quién no responder.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_status (
+                    thread_id TEXT PRIMARY KEY,
+                    status TEXT DEFAULT 'ACTIVE', -- 'ACTIVE' o 'PAUSED'
+                    last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # --- SECCIÓN DE AUTO-MIGRACIONES ---
+            # Permite actualizar la estructura de la base de datos sin borrar datos existentes.
+            
+            # Ejemplo: Agregar columna para conteo de tokens si no existe.
             try:
                 cursor.execute("ALTER TABLE chat_history ADD COLUMN tokens_used INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
-                pass # La columna ya existe, no hacemos nada
+                pass # La columna ya existe.
 
             conn.commit()
 
-# Instancia única para el proyecto
+# Instancia única (Singleton) para ser importada en todo el proyecto.
 db = DBConnection()

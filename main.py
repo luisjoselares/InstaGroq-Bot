@@ -3,21 +3,19 @@ import threading
 from core.database import db
 from core.instagram_engine import InstagramService
 
+# Instancia global del servicio
 insta_service = InstagramService()
 
 def main(page: ft.Page):
-    page.title = "Pegasus Social AI"
+    page.title = "InstaGroq - Pegasus AI"
     page.window_width = 450
-    page.window_height = 650
+    page.window_height = 700
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 20
 
     titulo = ft.Text("Gestor de IA para Instagram", size=24, weight=ft.FontWeight.BOLD)
     
-    # ==========================================
-    # 1. PESTAÑA: PANEL DE CONTROL
-    # ==========================================
-    status_text = ft.Text("Estado: DETENIDO", color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD)
+    # --- 1. CONFIGURACIÓN DE LOGS ---
     log_console = ft.ListView(expand=True, spacing=10, auto_scroll=True)
     
     def write_log(message):
@@ -25,6 +23,9 @@ def main(page: ft.Page):
         page.update()
 
     insta_service.set_callback(write_log)
+
+    # --- 2. ELEMENTOS DEL DASHBOARD ---
+    status_text = ft.Text("Estado: DETENIDO", color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD)
 
     def toggle_bot(e):
         with db.get_connection() as conn:
@@ -47,44 +48,22 @@ def main(page: ft.Page):
                 btn_toggle.style = ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE)
                 status_text.value = "Estado: DETENIDO"
                 status_text.color = ft.Colors.RED_400
-                write_log("Bot pausado. Se detendrá al finalizar el ciclo actual.")
+                write_log("Bot pausado. Deteniendo ciclo...")
                 insta_service.stop()
         page.update()
 
     btn_toggle = ft.ElevatedButton(
-        "INICIAR BOT", 
+        "INICIAR BOT",
         style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE),
         on_click=toggle_bot,
-        width=200, height=50
+        width=200,
+        height=50
     )
 
-    tab_dashboard = ft.Tab(
-        text="Panel de Control",
-        icon=ft.Icons.DASHBOARD,
-        content=ft.Column([
-            ft.Container(height=10),
-            ft.Row([status_text], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Container(height=10),
-            ft.Row([btn_toggle], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Container(height=10),
-            ft.Text("Registro de Actividad:", weight=ft.FontWeight.BOLD),
-            ft.Container(
-                content=log_console,
-                border=ft.border.all(1, ft.Colors.WHITE24),
-                border_radius=5, padding=10, expand=True
-            )
-        ])
-    )
-
-    # ==========================================
-    # 2. PESTAÑA: CONFIGURACIÓN
-    # ==========================================
-    
-    # Recuperar datos actuales para pre-llenar el formulario
+    # --- 3. ELEMENTOS DE AJUSTES ---
     with db.get_connection() as conn:
         config = conn.execute("SELECT * FROM settings LIMIT 1").fetchone()
         if not config:
-            # Insertar fila por defecto si no existe
             conn.execute("INSERT INTO settings (insta_user, insta_pass, groq_key, prompt_sistema, is_active) VALUES ('','','','Eres un asistente virtual.',0)")
             conn.commit()
             config = conn.execute("SELECT * FROM settings LIMIT 1").fetchone()
@@ -92,27 +71,42 @@ def main(page: ft.Page):
     txt_user = ft.TextField(label="Usuario de Instagram", value=config['insta_user'])
     txt_pass = ft.TextField(label="Contraseña", value=config['insta_pass'], password=True, can_reveal_password=True)
     txt_groq = ft.TextField(label="API Key de Groq", value=config['groq_key'], password=True, can_reveal_password=True)
-    txt_prompt = ft.TextField(label="Prompt del Sistema (IA)", value=config['prompt_sistema'], multiline=True, min_lines=4)
+    txt_prompt = ft.TextField(label="Prompt del Sistema", value=config['prompt_sistema'], multiline=True, min_lines=3)
 
     def save_settings(e):
         with db.get_connection() as conn:
             conn.execute('''
-                UPDATE settings 
-                SET insta_user = ?, insta_pass = ?, groq_key = ?, prompt_sistema = ?
+                UPDATE settings SET insta_user=?, insta_pass=?, groq_key=?, prompt_sistema=?
             ''', (txt_user.value, txt_pass.value, txt_groq.value, txt_prompt.value))
             conn.commit()
         
-        write_log("¡Configuración guardada en la base de datos!")
-        
-        # Muestra un pequeño mensaje de éxito nativo
-        page.open(ft.SnackBar(ft.Text("Configuración guardada exitosamente")))
+        page.overlay.append(ft.SnackBar(ft.Text("Configuración guardada exitosamente"), open=True))
+        write_log("Configuración actualizada.")
         page.update()
 
     btn_save = ft.ElevatedButton("Guardar Configuración", on_click=save_settings, icon=ft.Icons.SAVE)
 
-    tab_config = ft.Tab(
-        text="Ajustes",
-        icon=ft.Icons.SETTINGS,
+    # --- 4. CONSTRUCCIÓN DE CONTENIDOS (PARA EVITAR "NOT VISIBLE") ---
+    
+    # Creamos primero los contenedores de contenido
+    content_dashboard = ft.Column([
+        ft.Container(height=10),
+        ft.Row([status_text], alignment=ft.MainAxisAlignment.CENTER),
+        ft.Container(height=10),
+        ft.Row([btn_toggle], alignment=ft.MainAxisAlignment.CENTER),
+        ft.Container(height=15),
+        ft.Text("Registro de Actividad:", weight=ft.FontWeight.BOLD),
+        ft.Container(
+            content=log_console,
+            border=ft.Border.all(1, ft.Colors.WHITE24), # Corregido Border con B mayúscula
+            border_radius=10,
+            padding=10,
+            expand=True
+        )
+    ])
+
+    content_config = ft.Container(
+        padding=10,
         content=ft.Column([
             ft.Container(height=10),
             txt_user,
@@ -124,29 +118,37 @@ def main(page: ft.Page):
         ], scroll=ft.ScrollMode.AUTO)
     )
 
-    # ==========================================
-    # 3. RENDERIZADO PRINCIPAL
-    # ==========================================
-    
-    # Reseteo de seguridad al abrir la app
+    # Creamos las pestañas y asignamos el contenido manualmente para asegurar visibilidad
+    tab_dashboard = ft.Tab(label="Panel de Control", icon=ft.Icons.DASHBOARD)
+    tab_dashboard.content = content_dashboard
+
+    tab_config = ft.Tab(label="Ajustes", icon=ft.Icons.SETTINGS)
+    tab_config.content = content_config
+
+    # --- 5. SOLUCIÓN AL ERROR DE TABS ---
+    # Pasamos los argumentos posicionales exactos que pide tu traceback: 
+    # 1. La lista de pestañas (content) 
+    # 2. La longitud (length)
+    main_tabs = ft.Tabs(
+        [tab_dashboard, tab_config], # Argumento posicional 1
+        2,                           # Argumento posicional 2
+        selected_index=0,
+        animation_duration=300,
+        expand=True
+    )
+
+    # --- 6. INICIALIZACIÓN DE PÁGINA ---
     with db.get_connection() as conn:
         conn.execute("UPDATE settings SET is_active = 0")
         conn.commit()
 
-    tabs = ft.Tabs(
-        selected_index=0,
-        animation_duration=300,
-        tabs=[tab_dashboard, tab_config],
-        expand=1,
-    )
-
-    write_log("Sistema inicializado.")
-
+    write_log("Sistema listo.")
+    
     page.add(
         ft.Column([
             titulo,
             ft.Divider(),
-            tabs
+            main_tabs
         ], expand=True)
     )
 
