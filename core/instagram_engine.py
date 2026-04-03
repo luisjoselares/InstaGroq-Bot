@@ -38,7 +38,7 @@ class InstagramService:
                 self.cl.load_settings(self.session_file)
                 # IMPORTANTE: Verificamos si la sesión funciona SIN hacer login()
                 self.cl.get_timeline_feed() 
-                self._ui_log("Sesión recuperada (Sin login necesario).")
+                self._ui_log("Sesión recuperada exitosamente.")
                 return # Sesión válida, salimos con éxito
             except Exception:
                 self._ui_log("Sesión antigua expirada. Intentando re-login...")
@@ -66,6 +66,9 @@ class InstagramService:
             self.is_running = False
             return
 
+        self._ui_log("Motor en línea. Iniciando monitoreo de bandeja de entrada...")
+        ciclos_sin_mensajes = 0
+
         while self.is_running:
             try:
                 with db.get_connection() as conn:
@@ -74,16 +77,36 @@ class InstagramService:
                         time.sleep(5)
                         continue
 
-                # Filtro unread
-                threads = self.cl.direct_threads(amount=10, selected_filter="unread")
-                
-                for thread in threads:
-                    # MEJORA 5: Aislamiento de errores. Si un chat falla, no tumba al resto.
+                hay_mensajes_nuevos = False
+                hilos_a_procesar = []
+
+                # 1. Bandeja Principal (Eliminamos el filtro unread para evitar el bug de la API)
+                # Traemos los últimos 10 chats. La lógica de abajo decidirá si hay que responder.
+                try:
+                    main_threads = self.cl.direct_threads(amount=10)
+                    hilos_a_procesar.extend(main_threads)
+                except Exception as e:
+                    logging.warning(f"Error al leer bandeja principal: {e}")
+
+                # 2. Bandeja de Solicitudes (Gente que no te sigue)
+                try:
+                    pending_threads = self.cl.direct_pending_inbox()
+                    if pending_threads:
+                        hilos_a_procesar.extend(pending_threads)
+                except Exception as e:
+                    logging.warning(f"Error al leer bandeja de solicitudes: {e}")
+
+                # 3. Procesamos todos los hilos encontrados
+                for thread in hilos_a_procesar:
                     try:
                         if not thread.messages: continue
                         last_msg = thread.messages[0]
                         
+                        # LOGICA MAESTRA: Si el último mensaje es de la cuenta del bot, no hay nada que responder.
                         if last_msg.user_id == self.cl.user_id: continue
+                        
+                        hay_mensajes_nuevos = True
+                        ciclos_sin_mensajes = 0 # Reseteamos el contador visual
                         
                         # Modo Manual / Pánico
                         if self._requires_human(thread.id): continue
@@ -91,38 +114,39 @@ class InstagramService:
                             self._handoff_to_human(thread.id, thread.users[0].username)
                             continue
 
-                        self._ui_log(f"Nuevo mensaje de @{thread.users[0].username}")
+                        self._ui_log(f"Recibiendo mensaje de @{thread.users[0].username}...")
                         
-                        # Generamos la respuesta PRIMERO
+                        # Generamos la respuesta
                         respuesta = self.ai.generate_response(last_msg.text, thread.id)
                         
                         # Tiempo de 'Escribiendo...'
-                        time.sleep(random.uniform(5, 12))
+                        time.sleep(random.uniform(3, 6))
                         
-                        # Intentamos enviarlo
+                        # Si el mensaje estaba en solicitudes, direct_send lo aprobará automáticamente
                         self.cl.direct_send(respuesta, thread_ids=[thread.id])
-                        
-                        # SOLO DESPUÉS de un envío exitoso, lo marcamos como leído en Instagram
                         self.cl.direct_thread_mark_seen(thread.id)
                         
-                        self._ui_log(f"Respondido a @{thread.users[0].username}")
+                        self._ui_log(f"Respuesta enviada a @{thread.users[0].username}.")
                         self._log_interaction(thread.id, thread.users[0].username, last_msg.text, respuesta)
 
                     except Exception as thread_error:
-                        # Si falla un solo chat (ej. Groq se cayó para este mensaje), lo reportamos
-                        # y usamos 'continue' para seguir atendiendo a las otras 9 personas en cola.
                         logging.error(f"Error aislado en chat {thread.id}: {thread_error}")
                         continue
 
+                # Aviso visual para la interfaz
+                if not hay_mensajes_nuevos:
+                    ciclos_sin_mensajes += 1
+                    if ciclos_sin_mensajes % 3 == 0:
+                        self._ui_log("Monitoreando... (Sin mensajes nuevos)")
+
             except FeedbackRequired:
-                self._ui_log("¡Feedback Required! Instagram detectó mucha actividad. Pausando 10 min...")
-                time.sleep(600)
+                self._ui_log("¡Feedback Required! Instagram detectó mucha actividad. Pausando 5 min...")
+                time.sleep(300)
             except Exception as e:
-                # Este except principal ahora solo atrapa errores masivos (como pérdida de conexión a internet)
                 logging.error(f"Error crítico en motor principal: {e}")
             
-            # Delay maestro: Fundamental para no ser detectado
-            time.sleep(random.uniform(30, 60))
+            # Delay maestro
+            time.sleep(random.uniform(12, 22))
 
     def stop(self):
         self.is_running = False
@@ -140,10 +164,7 @@ class InstagramService:
             conn.execute("INSERT INTO chat_status (thread_id, status) VALUES (?, 'PAUSED') ON CONFLICT(thread_id) DO UPDATE SET status='PAUSED'", (tid,))
             conn.commit()
             
-        # --- CORRECCIÓN MENOR PREVENTIVA ---
-        # Se asegura el uso del kwarg thread_ids para evitar que envíe el tid como user_id
         self.cl.direct_send("Pausé mis respuestas. Un humano te atenderá.", thread_ids=[tid])
-        
         self._ui_log(f"Handoff manual activado para @{user}")
 
     def _log_interaction(self, tid, user, msg, resp):
