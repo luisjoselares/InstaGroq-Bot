@@ -3,7 +3,7 @@ import random
 import logging
 import os
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired
+from instagrapi.exceptions import LoginRequired, ChallengeRequired, FeedbackRequired
 from core.database import db
 from core.ai_engine import AIService
 
@@ -14,160 +14,130 @@ class InstagramService:
         self.is_running = False
         self.session_file = "sessions/insta_session.json"
         self.log_callback = None
-        # Aseguramos que la carpeta de sesiones exista
         os.makedirs("sessions", exist_ok=True)
 
     def set_callback(self, callback_func):
-        """Permite que la UI le pase su función de imprimir logs"""
         self.log_callback = callback_func
-    
+
     def _ui_log(self, mensaje):
-        """Imprime en consola y envía a la interfaz si está conectada"""
-        logging.info(mensaje) # Mantiene el log de consola
+        logging.info(mensaje)
         if self.log_callback:
             self.log_callback(mensaje)
 
-    def _get_credentials(self):
-        """Obtiene el usuario y clave de la base de datos local"""
+    def login(self):
+        """Inicia sesión de forma inteligente para evitar bloqueos por 'Login Dudoso'."""
         with db.get_connection() as conn:
             config = conn.execute("SELECT insta_user, insta_pass FROM settings LIMIT 1").fetchone()
-            if not config or not config['insta_user'] or not config['insta_pass']:
-                raise ValueError("Credenciales de Instagram no configuradas.")
-            return config['insta_user'], config['insta_pass']
+            if not config or not config['insta_user']:
+                raise ValueError("Credenciales no configuradas.")
+            user, pw = config['insta_user'], config['insta_pass']
 
-    def login(self):
-        """Inicia sesión utilizando caché para evitar bloqueos"""
-        username, password = self._get_credentials()
-        
-        try:
-            # Intentamos cargar la sesión guardada
-            if os.path.exists(self.session_file):
+        # 1. Intentar cargar sesión existente
+        if os.path.exists(self.session_file):
+            try:
                 self.cl.load_settings(self.session_file)
-                self.cl.login(username, password)
-                logging.info("Sesión recuperada desde archivo local.")
-            else:
-                self.cl.login(username, password)
-                self.cl.dump_settings(self.session_file)
-                logging.info("Nuevo inicio de sesión exitoso. Sesión guardada.")
-                
-        except LoginRequired:
-            logging.warning("Sesión expirada. Forzando re-login...")
-            self.cl.login(username, password, relogin=True)
+                # IMPORTANTE: Verificamos si la sesión funciona SIN hacer login()
+                self.cl.get_timeline_feed() 
+                self._ui_log("Sesión recuperada (Sin login necesario).")
+                return # Sesión válida, salimos con éxito
+            except Exception:
+                self._ui_log("Sesión antigua expirada. Intentando re-login...")
+        
+        # 2. Si no hay sesión o expiró, hacemos un 'Hard Login'
+        try:
+            self._ui_log(f"Iniciando sesión formal para @{user}...")
+            # Esperamos un poco antes de loguear para parecer humanos
+            time.sleep(random.uniform(2, 5)) 
+            self.cl.login(user, pw)
             self.cl.dump_settings(self.session_file)
+            self._ui_log("Nuevo login exitoso y sesión guardada.")
+        except ChallengeRequired:
+            self._ui_log("¡DESAFÍO DETECTADO! Abre Instagram en tu móvil y aprueba el inicio.")
+            raise
         except Exception as e:
-            logging.error(f"Error crítico en login: {e}")
-            raise e
+            self._ui_log(f"Error crítico en login: {str(e)}")
+            raise
 
     def start_polling(self):
-        """Bucle principal que vigila los mensajes"""
         self.is_running = True
-        self.login()
-        logging.info("Bot de Instagram iniciado. Escuchando mensajes...")
+        try:
+            self.login()
+        except Exception:
+            self.is_running = False
+            return
 
         while self.is_running:
             try:
-                # Revisar si el bot fue apagado desde la interfaz
                 with db.get_connection() as conn:
-                    status = conn.execute("SELECT is_active FROM settings LIMIT 1").fetchone()
-                    if status and status['is_active'] == 0:
-                        logging.info("Bot pausado desde la interfaz. Esperando...")
-                        time.sleep(10)
+                    status = conn.execute("SELECT is_active FROM settings").fetchone()
+                    if not status or status['is_active'] == 0:
+                        time.sleep(5); continue
+
+                # Filtro unread actualizado
+                threads = self.cl.direct_threads(amount=10, selected_filter="unread")
+                
+                for thread in threads:
+                    if not thread.messages: continue
+                    last_msg = thread.messages[0]
+                    
+                    if last_msg.user_id == self.cl.user_id: continue
+                    
+                    # Modo Manual / Pánico
+                    if self._requires_human(thread.id): continue
+                    if self._check_panic_keywords(last_msg.text):
+                        self._handoff_to_human(thread.id, thread.users[0].username)
                         continue
 
-                self._process_unseen_messages()
-                
+                    # Simulación de lectura y respuesta
+                    self._ui_log(f"Nuevo mensaje de @{thread.users[0].username}")
+                    
+                    # --- CORRECCIÓN APLICADA AQUÍ ---
+                    # Se reemplaza direct_message_mark_seen por direct_thread_mark_seen
+                    self.cl.direct_thread_mark_seen(thread.id)
+                    # --------------------------------
+                    
+                    respuesta = self.ai.generate_response(last_msg.text, thread.id)
+                    
+                    # Tiempo de 'Escribiendo...'
+                    time.sleep(random.uniform(5, 12))
+                    
+                    self.cl.direct_send(respuesta, thread_ids=[thread.id])
+                    self._ui_log(f"Respondido a @{thread.users[0].username}")
+                    
+                    self._log_interaction(thread.id, thread.users[0].username, last_msg.text, respuesta)
+
+            except FeedbackRequired:
+                self._ui_log("¡Feedback Required! Instagram detectó mucha actividad. Pausando 10 min...")
+                time.sleep(600)
             except Exception as e:
-                logging.error(f"Error en el ciclo de escucha: {e}")
+                logging.error(f"Error en motor: {e}")
             
-            # Delay maestro: No saturar los servidores de Meta
-            time.sleep(random.uniform(15, 30))
+            # Delay maestro: Fundamental para no ser detectado
+            time.sleep(random.uniform(30, 60))
 
     def stop(self):
-        """Detiene el servicio de forma segura"""
         self.is_running = False
 
-    def _process_unseen_messages(self):
-        """Procesa hilos con mensajes no leídos"""
-        # Obtenemos los hilos (chats) que tienen mensajes sin leer
-        threads = self.cl.direct_threads(amount=10, selected_filter="unread")
-        
-        for thread in threads:
-            last_msg = thread.messages[0]
-            thread_id = thread.id
-            user_id = last_msg.user_id
-            text = last_msg.text
-            username = thread.users[0].username if thread.users else str(user_id)
-
-            # 1. Evitar respondernos a nosotros mismos
-            if user_id == self.cl.user_id:
-                continue
-
-            # 2. Verificar si este chat requiere intervención humana
-            if self._requires_human(thread_id):
-                logging.info(f"Ignorando hilo {thread_id} - Modo manual activado.")
-                continue
-
-            # 3. Detectar palabras clave para "Botón de Pánico"
-            if self._check_panic_keywords(text, thread_id):
-                self._handoff_to_human(thread_id, username)
-                continue
-
-            # 4. Comportamiento Humano: Marcar como visto y "pensar"
-            self.cl.direct_thread_mark_unread(thread.id, False)
-            time.sleep(random.uniform(2, 6)) # Simulamos que estamos leyendo
-
-            # 5. Inteligencia Artificial (El Cerebro)
-            respuesta = self.ai.generate_response(text, thread_id)
-
-            # 6. Simulamos el tiempo que tarda en escribir
-            tiempo_escritura = len(respuesta) / 15 # Asumiendo 15 caracteres por segundo
-            time.sleep(min(tiempo_escritura, 8)) # Máximo 8 segundos de espera
-            
-            # 7. Enviamos el mensaje
-            self.cl.direct_send(respuesta, thread_ids=[thread.id])
-            
-            # 8. Guardamos en la Base de Datos
-            self._log_interaction(thread_id, username, text, respuesta)
-            
-            # Delay entre clientes
-            time.sleep(random.uniform(5, 10))
-
-    # --- Métodos Auxiliares de Lógica de Negocio ---
-
-    def _requires_human(self, thread_id):
-        """Consulta en SQLite si este chat está pausado para el bot"""
+    def _requires_human(self, tid):
         with db.get_connection() as conn:
-            status = conn.execute("SELECT status FROM chat_status WHERE thread_id = ?", (thread_id,)).fetchone()
-            return status and status['status'] == 'PAUSED'
+            row = conn.execute("SELECT status FROM chat_status WHERE thread_id = ?", (tid,)).fetchone()
+            return row and row['status'] == 'PAUSED'
 
-    def _check_panic_keywords(self, text, thread_id):
-        """Detecta si el usuario quiere hablar con una persona real"""
-        keywords = ["humano", "asesor", "persona", "ayuda", "representante", "agente"]
-        return any(keyword in text.lower() for keyword in keywords)
+    def _check_panic_keywords(self, text):
+        return any(k in text.lower() for k in ["humano", "persona", "asesor", "ayuda", "atencion"])
 
-    def _handoff_to_human(self, thread_id, username):
-        """Pausa el bot para este chat y avisa al dueño"""
-        # Actualizamos o insertamos el estado del hilo a PAUSED
+    def _handoff_to_human(self, tid, user):
         with db.get_connection() as conn:
-            conn.execute('''
-                INSERT INTO chat_status (thread_id, status, last_interaction) 
-                VALUES (?, 'PAUSED', CURRENT_TIMESTAMP)
-                ON CONFLICT(thread_id) DO UPDATE SET status = 'PAUSED', last_interaction = CURRENT_TIMESTAMP
-            ''', (thread_id,))
+            conn.execute("INSERT INTO chat_status (thread_id, status) VALUES (?, 'PAUSED') ON CONFLICT(thread_id) DO UPDATE SET status='PAUSED'", (tid,))
             conn.commit()
-
-        # Mensaje de despedida del bot
-        msg_despedida = "Entendido. He pausado mis respuestas automáticas y un asesor humano te atenderá a la brevedad posible."
-        self.cl.direct_send(msg_despedida, thread_ids=[thread_id])
+            
+        # --- CORRECCIÓN MENOR PREVENTIVA ---
+        # Se asegura el uso del kwarg thread_ids para evitar que envíe el tid como user_id
+        self.cl.direct_send("Pausé mis respuestas. Un humano te atenderá.", thread_ids=[tid])
         
-        logging.warning(f"¡Atención requerida! @{username} ha solicitado un humano.")
-        # Aquí más adelante conectaremos el webhook para notificar al celular del cliente.
+        self._ui_log(f"Handoff manual activado para @{user}")
 
-    def _log_interaction(self, thread_id, username, user_msg, ai_msg):
-        """Guarda la conversación en SQLite para la memoria del bot y analíticas"""
+    def _log_interaction(self, tid, user, msg, resp):
         with db.get_connection() as conn:
-            conn.execute('''
-                INSERT INTO chat_history (thread_id, username, mensaje_usuario, respuesta_ia)
-                VALUES (?, ?, ?, ?)
-            ''', (thread_id, username, user_msg, ai_msg))
+            conn.execute("INSERT INTO chat_history (thread_id, username, mensaje_usuario, respuesta_ia) VALUES (?,?,?,?)", (tid, user, msg, resp))
             conn.commit()
