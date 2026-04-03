@@ -28,8 +28,9 @@ class InstagramService:
         """Inicia sesión de forma inteligente para evitar bloqueos por 'Login Dudoso'."""
         with db.get_connection() as conn:
             config = conn.execute("SELECT insta_user, insta_pass FROM settings LIMIT 1").fetchone()
-            if not config or not config['insta_user']:
-                raise ValueError("Credenciales no configuradas.")
+            # Validación mejorada para el error de credenciales
+            if not config or not config['insta_user'] or not config['insta_pass']:
+                raise ValueError("Credenciales de Instagram no configuradas en la base de datos.")
             user, pw = config['insta_user'], config['insta_pass']
 
         # 1. Intentar cargar sesión existente
@@ -62,9 +63,14 @@ class InstagramService:
         self.is_running = True
         try:
             self.login()
-        except Exception:
+        except Exception as e:
+            # --- SOLUCIÓN PROBLEMA 1 APLICADA AQUÍ ---
+            # Atrapamos la excepción 'e' y la enviamos a la interfaz visual (Flet)
+            self._ui_log(f"⚠️ ERROR FATAL AL INICIAR: {str(e)}")
+            self._ui_log("❌ El motor se ha detenido. Revisa la configuración.")
             self.is_running = False
             return
+            # -----------------------------------------
 
         self._ui_log("Motor en línea. Iniciando monitoreo de bandeja de entrada...")
         ciclos_sin_mensajes = 0
@@ -80,8 +86,7 @@ class InstagramService:
                 hay_mensajes_nuevos = False
                 hilos_a_procesar = []
 
-                # 1. Bandeja Principal (Eliminamos el filtro unread para evitar el bug de la API)
-                # Traemos los últimos 10 chats. La lógica de abajo decidirá si hay que responder.
+                # 1. Bandeja Principal
                 try:
                     main_threads = self.cl.direct_threads(amount=10)
                     hilos_a_procesar.extend(main_threads)
@@ -102,11 +107,10 @@ class InstagramService:
                         if not thread.messages: continue
                         last_msg = thread.messages[0]
                         
-                        # LOGICA MAESTRA: Si el último mensaje es de la cuenta del bot, no hay nada que responder.
                         if last_msg.user_id == self.cl.user_id: continue
                         
                         hay_mensajes_nuevos = True
-                        ciclos_sin_mensajes = 0 # Reseteamos el contador visual
+                        ciclos_sin_mensajes = 0
                         
                         # Modo Manual / Pánico
                         if self._requires_human(thread.id): continue
