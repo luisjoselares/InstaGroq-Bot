@@ -21,36 +21,43 @@ class AIService:
 
     def generate_response(self, user_input, thread_id):
         """
-        Genera una respuesta inteligente considerando el historial 
-        del chat y el prompt del sistema configurado.
+        Genera una respuesta inteligente validando que no existan nulos en la memoria.
         """
+        # 0. Defensa rápida: Si el usuario mandó un sticker o nota de voz vacía
+        user_input_clean = str(user_input).strip() if user_input else ""
+        if not user_input_clean:
+            # Evitamos gastar tokens de la API si no hay texto que leer
+            return "He recibido un mensaje multimedia o un formato que aún no puedo leer. ¿Podrías escribírmelo?"
+
         try:
             client = self._get_client()
-            
-            # 1. Recuperamos el historial del hilo para darle memoria a la IA
             history = self._get_history(thread_id, limit=6)
             
-            # 2. Obtenemos el System Prompt configurado por el usuario
             with db.get_connection() as conn:
                 row = conn.execute("SELECT prompt_sistema FROM settings LIMIT 1").fetchone()
                 sys_prompt = row['prompt_sistema'] if row and row['prompt_sistema'] else "Eres un asistente profesional."
 
-            # 3. Construimos el paquete de mensajes
             messages = [{"role": "system", "content": sys_prompt}]
             
-            # Agregamos la memoria (historial previo)
+            # Agregamos la memoria con VALIDACIÓN ANTI-CRASH
             for h in history:
-                messages.append({"role": "user", "content": h['mensaje_usuario']})
-                messages.append({"role": "assistant", "content": h['respuesta_ia']})
+                # Limpiamos los datos de SQLite por si vienen como None o con puros espacios
+                msg_user = str(h['mensaje_usuario']).strip() if h['mensaje_usuario'] else ""
+                msg_ia = str(h['respuesta_ia']).strip() if h['respuesta_ia'] else ""
+                
+                # Solo inyectamos a la memoria si realmente hay texto útil
+                if msg_user:
+                    messages.append({"role": "user", "content": msg_user})
+                if msg_ia:
+                    messages.append({"role": "assistant", "content": msg_ia})
             
-            # Agregamos el mensaje actual
-            messages.append({"role": "user", "content": user_input})
+            # Agregamos el mensaje actual (ya validado en el paso 0)
+            messages.append({"role": "user", "content": user_input_clean})
 
-            # 4. Solicitud a la API de Groq
             completion = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.7, # Creatividad balanceada
+                temperature=0.7, 
                 max_tokens=500
             )
             
@@ -58,8 +65,8 @@ class AIService:
 
         except Exception as e:
             logging.error(f"Error en AI Service: {e}")
-            return "Lo siento, tuve un problema al procesar tu mensaje. ¿Podrías repetirlo?"
-
+            return "Lo siento, tuve un inconveniente procesando tu mensaje. ¿Podrías repetirlo?"
+        
     def _get_history(self, thread_id, limit=6):
         """Recupera los últimos mensajes de SQLite para este usuario específico."""
         with db.get_connection() as conn:

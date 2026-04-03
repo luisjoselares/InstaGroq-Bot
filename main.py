@@ -2,13 +2,13 @@ import sys
 import logging
 from PyQt6.QtWidgets import QApplication
 
-# Importamos las piezas siguiendo tu estructura modular
-from views.main_view import ChatWindow
-from core.instagram_engine import InstagramEngine
-from controllers.main_controller import MainController
+# Importaciones corregidas para coincidir con tus archivos y clases reales
+from views.chat_views import ChatWindow
+from core.instagram_engine import InstagramService
+from controllers.chat_controller import ChatController
 
 def main():
-    # Configuración básica de logs para ver el error del motor si ocurre
+    # Configuración básica de logs
     logging.basicConfig(level=logging.INFO)
     
     app = QApplication(sys.argv)
@@ -16,13 +16,11 @@ def main():
     # 1. Instanciamos la Vista (UI)
     vista = ChatWindow()
 
-    # 2. Instanciamos el Modelo/Motor (Lógica de Instagram)
-    # Aquí es donde vive la corrección del 'direct_thread_mark_seen'
-    motor = InstagramEngine()
+    # 2. Instanciamos el Modelo/Motor con el nombre correcto
+    motor = InstagramService()
 
-    # 3. El Controlador une a ambos
-    # Le pasamos la vista y el motor para que los gestione
-    controlador = MainController(vista, motor)
+    # 3. Usamos el controlador correcto que hace match con los botones de la vista
+    controlador = ChatController(vista, motor)
 
     vista.show()
     sys.exit(app.exec())

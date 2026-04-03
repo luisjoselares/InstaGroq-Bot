@@ -71,46 +71,55 @@ class InstagramService:
                 with db.get_connection() as conn:
                     status = conn.execute("SELECT is_active FROM settings").fetchone()
                     if not status or status['is_active'] == 0:
-                        time.sleep(5); continue
+                        time.sleep(5)
+                        continue
 
-                # Filtro unread actualizado
+                # Filtro unread
                 threads = self.cl.direct_threads(amount=10, selected_filter="unread")
                 
                 for thread in threads:
-                    if not thread.messages: continue
-                    last_msg = thread.messages[0]
-                    
-                    if last_msg.user_id == self.cl.user_id: continue
-                    
-                    # Modo Manual / Pánico
-                    if self._requires_human(thread.id): continue
-                    if self._check_panic_keywords(last_msg.text):
-                        self._handoff_to_human(thread.id, thread.users[0].username)
-                        continue
+                    # MEJORA 5: Aislamiento de errores. Si un chat falla, no tumba al resto.
+                    try:
+                        if not thread.messages: continue
+                        last_msg = thread.messages[0]
+                        
+                        if last_msg.user_id == self.cl.user_id: continue
+                        
+                        # Modo Manual / Pánico
+                        if self._requires_human(thread.id): continue
+                        if self._check_panic_keywords(last_msg.text):
+                            self._handoff_to_human(thread.id, thread.users[0].username)
+                            continue
 
-                    # Simulación de lectura y respuesta
-                    self._ui_log(f"Nuevo mensaje de @{thread.users[0].username}")
-                    
-                    # --- CORRECCIÓN APLICADA AQUÍ ---
-                    # Se reemplaza direct_message_mark_seen por direct_thread_mark_seen
-                    self.cl.direct_thread_mark_seen(thread.id)
-                    # --------------------------------
-                    
-                    respuesta = self.ai.generate_response(last_msg.text, thread.id)
-                    
-                    # Tiempo de 'Escribiendo...'
-                    time.sleep(random.uniform(5, 12))
-                    
-                    self.cl.direct_send(respuesta, thread_ids=[thread.id])
-                    self._ui_log(f"Respondido a @{thread.users[0].username}")
-                    
-                    self._log_interaction(thread.id, thread.users[0].username, last_msg.text, respuesta)
+                        self._ui_log(f"Nuevo mensaje de @{thread.users[0].username}")
+                        
+                        # Generamos la respuesta PRIMERO
+                        respuesta = self.ai.generate_response(last_msg.text, thread.id)
+                        
+                        # Tiempo de 'Escribiendo...'
+                        time.sleep(random.uniform(5, 12))
+                        
+                        # Intentamos enviarlo
+                        self.cl.direct_send(respuesta, thread_ids=[thread.id])
+                        
+                        # SOLO DESPUÉS de un envío exitoso, lo marcamos como leído en Instagram
+                        self.cl.direct_thread_mark_seen(thread.id)
+                        
+                        self._ui_log(f"Respondido a @{thread.users[0].username}")
+                        self._log_interaction(thread.id, thread.users[0].username, last_msg.text, respuesta)
+
+                    except Exception as thread_error:
+                        # Si falla un solo chat (ej. Groq se cayó para este mensaje), lo reportamos
+                        # y usamos 'continue' para seguir atendiendo a las otras 9 personas en cola.
+                        logging.error(f"Error aislado en chat {thread.id}: {thread_error}")
+                        continue
 
             except FeedbackRequired:
                 self._ui_log("¡Feedback Required! Instagram detectó mucha actividad. Pausando 10 min...")
                 time.sleep(600)
             except Exception as e:
-                logging.error(f"Error en motor: {e}")
+                # Este except principal ahora solo atrapa errores masivos (como pérdida de conexión a internet)
+                logging.error(f"Error crítico en motor principal: {e}")
             
             # Delay maestro: Fundamental para no ser detectado
             time.sleep(random.uniform(30, 60))

@@ -13,7 +13,7 @@ class DBConnection:
         return conn
 
     def init_db(self):
-        """Inicializa las tablas y maneja auto-migraciones básicas."""
+        """Inicializa las tablas, maneja migraciones y asegura datos semilla."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -30,7 +30,7 @@ class DBConnection:
                 )
             ''')
 
-            # 2. Tabla de Historial: Para la memoria de la IA (Contexto)
+            # 2. Tabla de Historial: Para la memoria de la IA
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,17 +43,24 @@ class DBConnection:
                 )
             ''')
 
-            # 3. Tabla de Estado de Chats: Controla el modo manual (Botón de Pánico)
+            # 3. Tabla de Estado de Chats: Controla el modo manual
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chat_status (
                     thread_id TEXT PRIMARY KEY,
-                    status TEXT DEFAULT 'ACTIVE', -- 'ACTIVE' o 'PAUSED'
+                    status TEXT DEFAULT 'ACTIVE',
                     last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
+            # --- MEJORA 4 APLICADA AQUÍ: EL REGISTRO SEMILLA ---
+            # Verificamos si la tabla de configuración está vacía
+            cursor.execute("SELECT COUNT(*) FROM settings")
+            if cursor.fetchone()[0] == 0:
+                # Insertamos una fila en blanco por defecto para que los UPDATEs de la UI funcionen
+                cursor.execute("INSERT INTO settings (id, is_active) VALUES (1, 0)")
+            # ---------------------------------------------------
+
             # --- AUTO-MIGRACIÓN ---
-            # Si decides añadir el conteo de tokens en el futuro para Pegasus
             try:
                 cursor.execute("ALTER TABLE chat_history ADD COLUMN tokens_used INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
