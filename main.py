@@ -19,12 +19,14 @@ def main(page: ft.Page):
     log_console = ft.ListView(expand=True, spacing=10, auto_scroll=True)
     
     def write_log(message):
+        # Corregido a ft.Colors
         log_console.controls.append(ft.Text(f"> {message}", size=12, color=ft.Colors.GREEN_200))
         page.update()
 
     insta_service.set_callback(write_log)
 
     # --- 2. ELEMENTOS DEL DASHBOARD ---
+    # Corregido a ft.Colors
     status_text = ft.Text("Estado: DETENIDO", color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD)
 
     def toggle_bot(e):
@@ -38,6 +40,7 @@ def main(page: ft.Page):
 
             if new_state == 1:
                 btn_toggle.text = "DETENER BOT"
+                # Corregido a ft.Colors
                 btn_toggle.style = ft.ButtonStyle(bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE)
                 status_text.value = "Estado: ACTIVO"
                 status_text.color = ft.Colors.GREEN_400
@@ -45,6 +48,7 @@ def main(page: ft.Page):
                 threading.Thread(target=insta_service.start_polling, daemon=True).start()
             else:
                 btn_toggle.text = "INICIAR BOT"
+                # Corregido a ft.Colors
                 btn_toggle.style = ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE)
                 status_text.value = "Estado: DETENIDO"
                 status_text.color = ft.Colors.RED_400
@@ -54,6 +58,7 @@ def main(page: ft.Page):
 
     btn_toggle = ft.ElevatedButton(
         "INICIAR BOT",
+        # Corregido a ft.Colors
         style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE),
         on_click=toggle_bot,
         width=200,
@@ -84,11 +89,11 @@ def main(page: ft.Page):
         write_log("Configuración actualizada.")
         page.update()
 
+    # Corregido a ft.Icons
     btn_save = ft.ElevatedButton("Guardar Configuración", on_click=save_settings, icon=ft.Icons.SAVE)
 
-    # --- 4. CONSTRUCCIÓN DE CONTENIDOS (PARA EVITAR "NOT VISIBLE") ---
+    # --- 4. CONTENEDORES DE VISTA ---
     
-    # Creamos primero los contenedores de contenido
     content_dashboard = ft.Column([
         ft.Container(height=10),
         ft.Row([status_text], alignment=ft.MainAxisAlignment.CENTER),
@@ -98,12 +103,13 @@ def main(page: ft.Page):
         ft.Text("Registro de Actividad:", weight=ft.FontWeight.BOLD),
         ft.Container(
             content=log_console,
-            border=ft.Border.all(1, ft.Colors.WHITE24), # Corregido Border con B mayúscula
+            # Corregido a ft.Colors y ft.Border (mayúsculas)
+            border=ft.Border.all(1, ft.Colors.WHITE24),
             border_radius=10,
             padding=10,
             expand=True
         )
-    ])
+    ], expand=True)
 
     content_config = ft.Container(
         padding=10,
@@ -115,26 +121,29 @@ def main(page: ft.Page):
             txt_prompt,
             ft.Container(height=10),
             ft.Row([btn_save], alignment=ft.MainAxisAlignment.END)
-        ], scroll=ft.ScrollMode.AUTO)
+        ], scroll=ft.ScrollMode.AUTO),
+        expand=True
     )
 
-    # Creamos las pestañas y asignamos el contenido manualmente para asegurar visibilidad
-    tab_dashboard = ft.Tab(label="Panel de Control", icon=ft.Icons.DASHBOARD)
-    tab_dashboard.content = content_dashboard
+    # Contenedor principal dinámico
+    main_container = ft.Container(content=content_dashboard, expand=True)
 
-    tab_config = ft.Tab(label="Ajustes", icon=ft.Icons.SETTINGS)
-    tab_config.content = content_config
+    # --- 5. NAVEGACIÓN CUSTOM ---
+    def change_tab(e):
+        if e.control.selected_index == 0:
+            main_container.content = content_dashboard
+        else:
+            main_container.content = content_config
+        main_container.update()
 
-    # --- 5. SOLUCIÓN AL ERROR DE TABS ---
-    # Pasamos los argumentos posicionales exactos que pide tu traceback: 
-    # 1. La lista de pestañas (content) 
-    # 2. La longitud (length)
-    main_tabs = ft.Tabs(
-        [tab_dashboard, tab_config], # Argumento posicional 1
-        2,                           # Argumento posicional 2
-        selected_index=0,
-        animation_duration=300,
-        expand=True
+    # Corregido a ft.Icons
+    nav_bar = ft.NavigationBar(
+        destinations=[
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD, label="Panel de Control"),
+            ft.NavigationBarDestination(icon=ft.Icons.SETTINGS, label="Ajustes"),
+        ],
+        on_change=change_tab,
+        selected_index=0
     )
 
     # --- 6. INICIALIZACIÓN DE PÁGINA ---
@@ -145,11 +154,10 @@ def main(page: ft.Page):
     write_log("Sistema listo.")
     
     page.add(
-        ft.Column([
-            titulo,
-            ft.Divider(),
-            main_tabs
-        ], expand=True)
+        titulo,
+        ft.Divider(),
+        main_container,
+        nav_bar
     )
 
 if __name__ == "__main__":

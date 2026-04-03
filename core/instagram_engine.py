@@ -26,7 +26,7 @@ class InstagramService:
         logging.info(mensaje) # Mantiene el log de consola
         if self.log_callback:
             self.log_callback(mensaje)
-            
+
     def _get_credentials(self):
         """Obtiene el usuario y clave de la base de datos local"""
         with db.get_connection() as conn:
@@ -89,7 +89,7 @@ class InstagramService:
     def _process_unseen_messages(self):
         """Procesa hilos con mensajes no leídos"""
         # Obtenemos los hilos (chats) que tienen mensajes sin leer
-        threads = self.cl.direct_threads(unseen=True)
+        threads = self.cl.direct_threads(amount=10, selected_filter="unread")
         
         for thread in threads:
             last_msg = thread.messages[0]
