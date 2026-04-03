@@ -1,29 +1,42 @@
-import sys
-import logging
-from PyQt6.QtWidgets import QApplication
+import flet as ft
+import threading
+from core.instagram_engine import InstagramService # El que corregimos con 'direct_thread_mark_seen'
+from views.flet_view import PegasusChatView
 
-# Importaciones corregidas para coincidir con tus archivos y clases reales
-from views.chat_views import ChatWindow
-from core.instagram_engine import InstagramService
-from controllers.chat_controller import ChatController
+def main(page: ft.Page):
+    page.title = "Pegasus ERP - Instagram Module"
+    page.theme_mode = ft.ThemeMode.DARK
+    page.window_width = 600
+    page.window_height = 500
 
-def main():
-    # Configuración básica de logs
-    logging.basicConfig(level=logging.INFO)
-    
-    app = QApplication(sys.argv)
-
-    # 1. Instanciamos la Vista (UI)
-    vista = ChatWindow()
-
-    # 2. Instanciamos el Modelo/Motor con el nombre correcto
+    # 1. Instanciamos el Motor
     motor = InstagramService()
 
-    # 3. Usamos el controlador correcto que hace match con los botones de la vista
-    controlador = ChatController(vista, motor)
+    # 2. Funciones de control (Lógica del "Controlador")
+    def iniciar_motor(e):
+        view.status_dot.bgcolor = ft.colors.GREEN
+        view.status_text.value = "Ejecutando..."
+        view.append_log("Iniciando motor de Instagram...", page)
+        
+        # Ejecutar en hilo para no bloquear la UI de Flet
+        thread = threading.Thread(target=motor.start_polling, daemon=True)
+        thread.start()
+        page.update()
 
-    vista.show()
-    sys.exit(app.exec())
+    def detener_motor(e):
+        motor.stop()
+        view.status_dot.bgcolor = ft.colors.RED
+        view.status_text.value = "Detenido"
+        view.append_log("Orden de detención enviada.", page)
+        page.update()
+
+    # 3. Instanciamos la Vista y la añadimos a la página
+    view = PegasusChatView(iniciar_motor, detener_motor)
+    page.add(view.build())
+
+    # 4. Conectamos los logs del motor para que aparezcan en la UI
+    motor.set_callback(lambda msg: view.append_log(msg, page))
 
 if __name__ == "__main__":
-    main()
+    # Si no tienes flet instalado: pip install flet
+    ft.app(target=main)
